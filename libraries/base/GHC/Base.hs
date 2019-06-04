@@ -129,6 +129,8 @@ import {-# SOURCE #-} GHC.IO (failIO,mplusIO)
 import GHC.Tuple ()     -- Note [Depend on GHC.Tuple]
 import GHC.Integer ()   -- Note [Depend on GHC.Integer]
 
+
+
 -- for 'class Semigroup'
 import {-# SOURCE #-} GHC.Real (Integral)
 import {-# SOURCE #-} Data.Semigroup.Internal ( stimesDefault
@@ -1296,11 +1298,11 @@ asTypeOf                =  const
 ----------------------------------------------
 
 -- | @since 2.01
-instance  Functor IO where
+instance  Functor IO' where
    fmap f x = x >>= (pure . f)
 
 -- | @since 2.01
-instance Applicative IO where
+instance Applicative IO' where
     {-# INLINE pure #-}
     {-# INLINE (*>) #-}
     {-# INLINE liftA2 #-}
@@ -1310,7 +1312,7 @@ instance Applicative IO where
     liftA2 = liftM2
 
 -- | @since 2.01
-instance  Monad IO  where
+instance  Monad IO'  where
     {-# INLINE (>>)   #-}
     {-# INLINE (>>=)  #-}
     (>>)      = (*>)
@@ -1318,24 +1320,90 @@ instance  Monad IO  where
     fail s    = failIO s
 
 -- | @since 4.9.0.0
-instance Alternative IO where
+instance Alternative IO' where
     empty = failIO "mzero"
     (<|>) = mplusIO
 
 -- | @since 4.9.0.0
-instance MonadPlus IO
+instance MonadPlus IO'
 
-returnIO :: a -> IO a
-returnIO x = IO (\ s -> (# s, x #))
+returnIO :: a -> IO' a
+returnIO x = IO' (\ s -> (# s, x #))
 
-bindIO :: IO a -> (a -> IO b) -> IO b
-bindIO (IO m) k = IO (\ s -> case m s of (# new_s, a #) -> unIO (k a) new_s)
+bindIO :: IO' a -> (a -> IO' b) -> IO' b
+bindIO (IO' m) k = IO' (\ s -> case m s of (# new_s, a #) -> unIO (k a) new_s)
 
-thenIO :: IO a -> IO b -> IO b
-thenIO (IO m) k = IO (\ s -> case m s of (# new_s, _ #) -> unIO k new_s)
+thenIO :: IO' a -> IO' b -> IO' b
+thenIO (IO' m) k = IO' (\ s -> case m s of (# new_s, _ #) -> unIO k new_s)
 
-unIO :: IO a -> (State# RealWorld -> (# State# RealWorld, a #))
-unIO (IO a) = a
+unIO :: IO' a -> (State# RealWorld -> (# State# RealWorld, a #))
+unIO (IO' a) = a
+
+
+-- Type coercion is necessary because continuations can only be modeled fully within Indexed monads.
+-- See paper P. Wadler "Monads and composable continuations"
+-- The symtom of that problem in the typical continuation monad is an extra parameter r that complicates reasoning
+-- This monad eliminates the extra parameter by coercing types since, by construction, the contination parameter is of the
+--  type of the result of the first term of the bind.
+ety :: a -> b
+ety=   dontWorryEverithingisOk
+tdyn :: a -> Dyn
+tdyn=  dontWorryEverithingisOk
+fdyn :: Dyn -> a
+fdyn = dontWorryEverithingisOk
+
+instance Functor IO where
+    fmap f m = IO $ \c -> ety $ runFiberC m $ \ x->   ety c $ f $ fdyn x
+
+
+instance Applicative IO  where
+    pure a  = IO ($  tdyn a)
+    --f <*> v = ety $ IO $ \ k -> ety $ runFiberC f $ \ g -> ety $ runFiberC v $ \t -> k $ (ety g) t
+    f <*> v =   do
+          r1 <- liftIO $ newIORef Nothing
+          r2 <- liftIO $ newIORef Nothing
+          (fparallel r1 r2)  <|> (vparallel  r1 r2)
+      where
+
+      fparallel :: IORef (Maybe(a -> b)) -> IORef (Maybe a) -> IO b
+      fparallel r1 r2= ety $ IO $ \k  ->
+          runFiberC f $ \g -> do
+                (liftIO $ writeIORef r1  $ Just (fdyn  g)) !> "f write r1"
+                mt <- liftIO $ readIORef r2  !> "f read r2"
+                case mt of
+                  Just t -> k $ (fdyn g) t
+                  Nothing -> liftIO $ throw  Empty  !> "throwempty"
+
+      vparallel :: IORef (Maybe(a -> b)) -> IORef (Maybe a) -> IO b
+      vparallel  r1 r2=  ety $ IO $ \k  ->
+          runFiberC v $ \t ->  do
+                 (liftIO $ writeIORef r2 $ Just (fdyn t)) !> "v write r2"
+                 mg <- liftIO $ readIORef r1 !> "v read r1"
+                 case mg of
+                   Nothing -> liftIO $ throw  Empty   !> "throwempty"
+                   Just g -> ( k $ (ety g) t)  !> "JUST"
+
+data Empty= Empty  deriving Typeable
+-- instance Show Empty where show _= "Empty"
+instance Exception Empty
+
+instance Alternative IO where
+    empty= liftIO $ throw  Empty
+    f <|>  g= callCC $ \k -> do -- liftIO  $ runFiber  (f >>=k)  `catch` \Empty -> runFiber  (g >>=k)
+
+
+            r <- liftIO $ newIORef False
+            let io  f cont= runFiber  (f >>= cont' )
+                    where cont' x= do liftIO $ (writeIORef r True) !> "write" ; cont x
+            liftIO $ do
+                 io f k `catch` \(Empty) -> do
+                    c <- liftIO $ readIORef r
+                    when c $ throw Empty
+                    io g k
+
+instance   Monad IO  where
+    return  = pure
+    m >>= k  = IO $ \c -> ety $ runFiberC m (\x -> ety $ runFiberC ( k $ fdyn x) c)
 
 ----------------------------------------------
 -- Functor/Applicative/Monad instances for Java

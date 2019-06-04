@@ -58,7 +58,6 @@ Unicode (or equivalently ISO\/IEC 10646) characters (see
 (Latin-1) character set (the first 256 characters), which is itself an extension
 of the ASCII character set (the first 128 characters).  A character literal in
 Haskell has type 'Char'.
-
 To convert a 'Char' to or from the corresponding 'Int' value defined
 by Unicode, use 'Prelude.toEnum' and 'Prelude.fromEnum' from the
 'Prelude.Enum' class respectively (or equivalently 'ord' and 'chr').
@@ -88,17 +87,21 @@ data Ordering = LT | EQ | GT
 {- |
 A value of type @'IO' a@ is a computation which, when performed,
 does some I\/O before returning a value of type @a@.
-
 There is really only one way to \"perform\" an I\/O action: bind it to
 @Main.main@ in your program.  When your program is run, the I\/O will
 be performed.  It isn't possible to perform I\/O from an arbitrary
 function, unless that function is itself in the 'IO' monad and called
 at some point, directly or indirectly, from @Main.main@.
-
 'IO' is a monad, so 'IO' actions can be combined using either the do-notation
 or the '>>' and '>>=' operations from the 'Monad' class.
 -}
-newtype IO a = IO (State# RealWorld -> (# State# RealWorld, a #))
+newtype IO' a = IO' (State# RealWorld -> (# State# RealWorld, a #))
+
+
+
+type Dyn= ()
+newtype IO a=  IO { runFiberC :: (Dyn -> IO' a) -> IO' a }
+
 type role IO representational
 {-
 The above role annotation is redundant but is included because this role
@@ -110,15 +113,12 @@ elsewhere in GHC would be necessary. See [FFI type roles] in TcForeign.
 {-
 Note [Kind-changing of (~) and Coercible]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
 (~) and Coercible are tricky to define. To the user, they must appear as
 constraints, but we cannot define them as such in Haskell. But we also cannot
 just define them only in GHC.Prim (like (->)), because we need a real module
 for them, e.g. to compile the constructor's info table.
-
 Furthermore the type of MkCoercible cannot be written in Haskell
 (no syntax for ~#R).
-
 So we define them as regular data types in GHC.Types, and do magic in TysWiredIn,
 inside GHC, to change the kind and type.
 -}
