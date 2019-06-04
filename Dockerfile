@@ -12,3 +12,10 @@ RUN git clone https://github.com/haskell/haskell-ide-engine --recursive && \
     cd haskell-ide-engine && \
     stack install
 
+RUN cd /workspace && mkdir bin && cd bin && \
+    curl https://cdnverify.eta-lang.org/eta-binaries/etlas-1.5.0.0/binaries/x86_64-linux/etlas > etlas && \
+    chmod 777 etlas && \
+    PATH=/workspace/bin:$PATH
+
+RUN cd /workspace/eta && ./install.sh
+
