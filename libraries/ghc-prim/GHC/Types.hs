@@ -95,7 +95,7 @@ at some point, directly or indirectly, from @Main.main@.
 'IO' is a monad, so 'IO' actions can be combined using either the do-notation
 or the '>>' and '>>=' operations from the 'Monad' class.
 -}
-
+ 
 newtype IO' a = IO' (State# RealWorld -> (# State# RealWorld, a #))
 
 
