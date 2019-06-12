@@ -54,7 +54,7 @@ data StablePtr a = StablePtr (StablePtr# a)
 -- Create a stable pointer referring to the given Haskell value.
 --
 newStablePtr   :: a -> IO (StablePtr a)
-newStablePtr a = IO $ \ s ->
+newStablePtr a = liftPrim $ \ s ->
     case makeStablePtr# a s of (# s', sp #) -> (# s', StablePtr sp #)
 
 -- |
@@ -65,7 +65,7 @@ newStablePtr a = IO $ \ s ->
 -- 'deRefStablePtr' is undefined.
 --
 deRefStablePtr :: StablePtr a -> IO a
-deRefStablePtr (StablePtr sp) = IO $ \s -> deRefStablePtr# sp s
+deRefStablePtr (StablePtr sp) = liftPrim $ \s -> deRefStablePtr# sp s
 
 -- |
 -- Dissolve the association between the stable pointer and the Haskell

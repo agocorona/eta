@@ -43,13 +43,13 @@ foreign import java unsafe "@new" globalObject :: Object
 
 {-# INLINE java #-}
 java :: (forall c. Java c a) -> IO a
-java (Java m) = IO $ \s ->
+java (Java m) = liftPrim $ \s ->
   case m (freshNullObjectToken# s) of
       (# o1, a #) -> (# freshStateToken# o1, a #)
 
 {-# INLINE javaWith #-}
 javaWith :: (Class c) => c -> Java c a -> IO a
-javaWith c (Java m) = IO $ \s ->
+javaWith c (Java m) = liftPrim $ \s ->
   case m (freshObjectToken# s (unobj c)) of
     (# o1, a #) -> (# freshStateToken# o1, a #)
 
@@ -73,8 +73,8 @@ withObject = (<.>)
 
 {-# INLINE io #-}
 io :: IO a -> Java c a
-io (IO m) = Java $ \o ->
-  case m (freshStateToken# o) of
+io (m) = Java $ \o ->
+  case (unIO m) (freshStateToken# o) of
     (# o1, a #) -> (# freshObjectToken# o1 o, a #)
 
 {-# INLINE (>-) #-}

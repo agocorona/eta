@@ -60,7 +60,7 @@ writes.
 
 -- |Create an 'MVar' which is initially empty.
 newEmptyMVar  :: IO (MVar a)
-newEmptyMVar = IO $ \ s# ->
+newEmptyMVar = liftPrim $ \ s# ->
     case newMVar# s# of
          (# s2#, svar# #) -> (# s2#, MVar svar# #)
 
@@ -87,7 +87,7 @@ newMVar value =
 --     fairness properties of abstractions built using 'MVar's.
 --
 takeMVar :: MVar a -> IO a
-takeMVar (MVar mvar#) = IO $ \ s# -> takeMVar# mvar# s#
+takeMVar (MVar mvar#) = liftPrim $ \ s# -> takeMVar# mvar# s#
 
 -- |Atomically read the contents of an 'MVar'.  If the 'MVar' is
 -- currently empty, 'readMVar' will wait until it is full.
@@ -112,7 +112,7 @@ takeMVar (MVar mvar#) = IO $ \ s# -> takeMVar# mvar# s#
 --      return a
 -- @
 readMVar :: MVar a -> IO a
-readMVar (MVar mvar#) = IO $ \ s# -> readMVar# mvar# s#
+readMVar (MVar mvar#) = liftPrim $ \ s# -> readMVar# mvar# s#
 
 -- |Put a value into an 'MVar'.  If the 'MVar' is currently full,
 -- 'putMVar' will wait until it becomes empty.
@@ -129,7 +129,7 @@ readMVar (MVar mvar#) = IO $ \ s# -> readMVar# mvar# s#
 --     fairness properties of abstractions built using 'MVar's.
 --
 putMVar  :: MVar a -> a -> IO ()
-putMVar (MVar mvar#) x = IO $ \ s# ->
+putMVar (MVar mvar#) x = liftPrim $ \ s# ->
     case putMVar# mvar# x s# of
         s2# -> (# s2#, () #)
 
@@ -138,7 +138,7 @@ putMVar (MVar mvar#) x = IO $ \ s# ->
 -- @'Just' a@ if the 'MVar' was full with contents @a@.  After 'tryTakeMVar',
 -- the 'MVar' is left empty.
 tryTakeMVar :: MVar a -> IO (Maybe a)
-tryTakeMVar (MVar m) = IO $ \ s ->
+tryTakeMVar (MVar m) = liftPrim $ \ s ->
     case tryTakeMVar# m s of
         (# s', 0#, _ #) -> (# s', Nothing #)      -- MVar is empty
         (# s', _,  a #) -> (# s', Just a  #)      -- MVar is full
@@ -147,7 +147,7 @@ tryTakeMVar (MVar m) = IO $ \ s ->
 -- attempts to put the value @a@ into the 'MVar', returning 'True' if
 -- it was successful, or 'False' otherwise.
 tryPutMVar  :: MVar a -> a -> IO Bool
-tryPutMVar (MVar mvar#) x = IO $ \ s# ->
+tryPutMVar (MVar mvar#) x = liftPrim $ \ s# ->
     case tryPutMVar# mvar# x s# of
         (# s, 0# #) -> (# s, False #)
         (# s, _  #) -> (# s, True #)
@@ -158,7 +158,7 @@ tryPutMVar (MVar mvar#) x = IO $ \ s# ->
 --
 -- @since 4.7.0.0
 tryReadMVar :: MVar a -> IO (Maybe a)
-tryReadMVar (MVar m) = IO $ \ s ->
+tryReadMVar (MVar m) = liftPrim $ \ s ->
     case tryReadMVar# m s of
         (# s', 0#, _ #) -> (# s', Nothing #)      -- MVar is empty
         (# s', _,  a #) -> (# s', Just a  #)      -- MVar is full
@@ -170,7 +170,7 @@ tryReadMVar (MVar m) = IO $ \ s ->
 -- the MVar may have been filled (or emptied) - so be extremely
 -- careful when using this operation.   Use 'tryTakeMVar' instead if possible.
 isEmptyMVar :: MVar a -> IO Bool
-isEmptyMVar (MVar mv#) = IO $ \ s# ->
+isEmptyMVar (MVar mv#) = liftPrim $ \ s# ->
     case isEmptyMVar# mv# s# of
         (# s2#, flg #) -> (# s2#, isTrue# (flg /=# 0#) #)
 
@@ -178,4 +178,4 @@ isEmptyMVar (MVar mv#) = IO $ \ s# ->
 -- "System.Mem.Weak" for more about finalizers.
 addMVarFinalizer :: MVar a -> IO () -> IO ()
 addMVarFinalizer (MVar m) (IO finalizer) =
-    IO $ \s -> case mkWeak# m () finalizer s of { (# s1, _ #) -> (# s1, () #) }
+    liftPrim $ \s -> case mkWeak# m () finalizer s of { (# s1, _ #) -> (# s1, () #) }

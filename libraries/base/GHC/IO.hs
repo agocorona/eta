@@ -78,10 +78,10 @@ Libraries - parts of hslibs/lang.
 -}
 
 liftIO :: IO a -> State# RealWorld -> STret RealWorld a
-liftIO (IO m) = \s -> case m s of (# s', r #) -> STret s' r
+liftIO m = \s -> case (unIO m) s of (# s', r #) -> STret s' r
 
 failIO :: String -> IO a
-failIO s = IO (raiseIO# (toException (userError s)))
+failIO s = liftPrim (raiseIO# (toException (userError s)))
 
 -- ---------------------------------------------------------------------------
 -- Coercions between IO and ST
@@ -91,13 +91,13 @@ failIO s = IO (raiseIO# (toException (userError s)))
 -- used by the 'ST' computation is a special one supplied by the 'IO'
 -- monad, and thus distinct from those used by invocations of 'runST'.
 stToIO        :: ST RealWorld a -> IO a
-stToIO (ST m) = IO m
+stToIO (ST m) = liftPrim m
 
 -- | Convert an 'IO' action into an 'ST' action. The type of the result
 -- is constrained to use a 'RealWorld' state, and therefore the result cannot
 -- be passed to 'runST'.
 ioToST        :: IO a -> ST RealWorld a
-ioToST (IO m) = (ST m)
+ioToST (m) = (ST $ unIO m)
 
 -- | Convert an 'IO' action to an 'ST' action.
 -- This relies on 'IO' and 'ST' having the same representation modulo the
@@ -184,7 +184,7 @@ catch   :: Exception e
         -> (e -> IO a)  -- ^ Handler to invoke if an exception is raised
         -> IO a
 -- See #exceptions_and_strictness#.
-catch (IO io) handler = IO $ catch# io handler'
+catch (io) handler = liftPrim $ catch# (unIO io) handler'
     where handler' e = case fromException e of
                        Just e' -> unIO (handler e')
                        Nothing -> raiseIO# e
@@ -196,7 +196,7 @@ catch (IO io) handler = IO $ catch# io handler'
 -- @catchAny undefined b == _|_@. See #exceptions_and_strictness# for
 -- details.
 catchAny :: IO a -> (forall e . Exception e => e -> IO a) -> IO a
-catchAny !(IO io) handler = IO $ catch# io handler'
+catchAny !(io) handler = liftPrim $ catch# (unIO io) handler'
     where handler' (SomeException e) = unIO (handler e)
 
 -- Using catchException here means that if `m` throws an
@@ -221,7 +221,7 @@ mplusIO m n = m `catchException` \ (_ :: IOError) -> n
 -- ordering with respect to other 'IO' operations, whereas 'throw'
 -- does not.
 throwIO :: Exception e => e -> IO a
-throwIO e = IO (raiseIO# (toException e))
+throwIO e = liftPrim (raiseIO# (toException e))
 
 -- -----------------------------------------------------------------------------
 -- Controlling asynchronous exception delivery
@@ -241,7 +241,7 @@ throwIO e = IO (raiseIO# (toException e))
 -- establish an exception handler in the forked thread before any
 -- asynchronous exceptions are received.
 block :: IO a -> IO a
-block (IO io) = IO $ maskAsyncExceptions# io
+block (io) = liftPrim $ maskAsyncExceptions# (unIO io)
 
 -- To re-enable asynchronous exceptions inside the scope of
 -- 'block', 'unblock' can be
@@ -252,7 +252,7 @@ unblock :: IO a -> IO a
 unblock = unsafeUnmask
 
 unsafeUnmask :: IO a -> IO a
-unsafeUnmask (IO io) = IO $ unmaskAsyncExceptions# io
+unsafeUnmask (io) = liftPrim $ unmaskAsyncExceptions# (unIO io)
 
 -- | Allow asynchronous exceptions to be raised even inside 'mask', making
 -- the operation interruptible (see the discussion of "Interruptible operations"
@@ -271,7 +271,7 @@ interruptible act = do
     MaskedUninterruptible -> act
 
 blockUninterruptible :: IO a -> IO a
-blockUninterruptible (IO io) = IO $ maskUninterruptible# io
+blockUninterruptible (io) = liftPrim $ maskUninterruptible# (unIO io)
 
 -- | Describes the behaviour of a thread when an asynchronous
 -- exception is received.
@@ -285,7 +285,7 @@ data MaskingState
 
 -- | Returns the 'MaskingState' for the current thread.
 getMaskingState :: IO MaskingState
-getMaskingState  = IO $ \s ->
+getMaskingState  = liftPrim $ \s ->
   case getMaskingState# s of
      (# s', i #) -> (# s', case i of
                              0# -> Unmasked
@@ -435,11 +435,11 @@ a `finally` sequel =
 -- efficiency reasons only and do not care about exceptions, you may
 -- use @'return' '$!' x@.
 evaluate :: a -> IO a
-evaluate a = IO $ \s -> seq# a s -- NB. see #2273, #5129
+evaluate a = liftPrim $ \s -> seq# a s -- NB. see #2273, #5129
 
 trampolineIO :: IO a -> IO a
-trampolineIO (IO m) = IO $ \s ->
-  case trampolineIO# (unsafeCoerce# m) s of
+trampolineIO ( m) = liftPrim $ \s ->
+  case trampolineIO# (unsafeCoerce# $ unIO m) s of
     (# s', a #) -> (# s', unsafeCoerce# a #)
 
 foreign import prim "eta.runtime.stg.Stg.trampolineIO"

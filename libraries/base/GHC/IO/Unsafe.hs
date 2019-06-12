@@ -101,7 +101,7 @@ like 'bracket' cannot be used safely within 'unsafeDupablePerformIO'.
 @since 4.4.0.0
 -}
 unsafeDupablePerformIO  :: IO a -> a
-unsafeDupablePerformIO (IO m) = case runRW# m of (# _, a #) -> a
+unsafeDupablePerformIO m = case runRW# (unIO m)  of (# _, a #) -> a
 
 {-|
 'unsafeInterleaveIO' allows an 'IO' computation to be deferred lazily.
@@ -147,9 +147,9 @@ only once, use 'unsafeInterleaveIO' instead.
 {-# NOINLINE unsafeDupableInterleaveIO #-}
 -- See Note [unsafeDupableInterleaveIO should not be inlined]
 unsafeDupableInterleaveIO :: IO a -> IO a
-unsafeDupableInterleaveIO (IO m)
-  = IO ( \ s -> let
-                   r = case m s of (# _, res #) -> res
+unsafeDupableInterleaveIO  m
+  = liftPrim ( \ s -> let
+                   r = case (unIO m) s of (# _, res #) -> res
                 in
                 (# s, r #))
 
@@ -164,4 +164,4 @@ prevent the IO action from being executed multiple times, which is usually
 undesirable.
 -}
 noDuplicate :: IO ()
-noDuplicate = IO $ \s -> case noDuplicate# s of s' -> (# s', () #)
+noDuplicate = liftPrim $ \s -> case noDuplicate# s of s' -> (# s', () #)

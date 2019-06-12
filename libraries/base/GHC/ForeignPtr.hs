@@ -159,7 +159,7 @@ mallocForeignPtr = doMalloc undefined
           | I# size < 0 = errorWithoutStackTrace "mallocForeignPtr: size must be >= 0"
           | otherwise = do
           r <- newIORef NoFinalizers
-          IO $ \s ->
+          liftPrim $ \s ->
             case newAlignedPinnedByteArray# size align s of { (# s', mbarr# #) ->
              (# s', ForeignPtr (byteArrayContents# (unsafeCoerce# mbarr#))
                                (MallocPtr mbarr# r) #)
@@ -174,8 +174,8 @@ mallocForeignPtrBytes size | size < 0 =
   errorWithoutStackTrace "mallocForeignPtrBytes: size must be >= 0"
 mallocForeignPtrBytes (I# size) = do
   r <- newIORef NoFinalizers
-  IO $ \s ->
-     case newPinnedByteArray# size s      of { (# s', mbarr# #) ->
+  liftPrim $ \s ->
+     case newPinnedByteArray# size s   of { (# s', mbarr# #) ->
        (# s', ForeignPtr (byteArrayContents# (unsafeCoerce# mbarr#))
                          (MallocPtr mbarr# r) #)
      }
@@ -188,7 +188,7 @@ mallocForeignPtrAlignedBytes size _align | size < 0 =
   errorWithoutStackTrace "mallocForeignPtrAlignedBytes: size must be >= 0"
 mallocForeignPtrAlignedBytes (I# size) (I# align) = do
   r <- newIORef NoFinalizers
-  IO $ \s ->
+  liftPrim $ \s ->
      case newAlignedPinnedByteArray# size align s of { (# s', mbarr# #) ->
        (# s', ForeignPtr (byteArrayContents# (unsafeCoerce# mbarr#))
                          (MallocPtr mbarr# r) #)
@@ -212,7 +212,7 @@ mallocPlainForeignPtr = doMalloc undefined
   where doMalloc :: Storable b => b -> IO (ForeignPtr b)
         doMalloc a
           | I# size < 0 = errorWithoutStackTrace "mallocForeignPtr: size must be >= 0"
-          | otherwise = IO $ \s ->
+          | otherwise = liftPrim $ \s ->
             case newAlignedPinnedByteArray# size align s of { (# s', mbarr# #) ->
              (# s', ForeignPtr (byteArrayContents# (unsafeCoerce# mbarr#))
                                (PlainPtr mbarr#) #)
@@ -227,7 +227,7 @@ mallocPlainForeignPtr = doMalloc undefined
 mallocPlainForeignPtrBytes :: Int -> IO (ForeignPtr a)
 mallocPlainForeignPtrBytes size | size < 0 =
   errorWithoutStackTrace "mallocPlainForeignPtrBytes: size must be >= 0"
-mallocPlainForeignPtrBytes (I# size) = IO $ \s ->
+mallocPlainForeignPtrBytes (I# size) = liftPrim $ \s ->
     case newPinnedByteArray# size s      of { (# s', mbarr# #) ->
        (# s', ForeignPtr (byteArrayContents# (unsafeCoerce# mbarr#))
                          (PlainPtr mbarr#) #)
@@ -240,7 +240,7 @@ mallocPlainForeignPtrBytes (I# size) = IO $ \s ->
 mallocPlainForeignPtrAlignedBytes :: Int -> Int -> IO (ForeignPtr a)
 mallocPlainForeignPtrAlignedBytes size _align | size < 0 =
   errorWithoutStackTrace "mallocPlainForeignPtrAlignedBytes: size must be >= 0"
-mallocPlainForeignPtrAlignedBytes (I# size) (I# align) = IO $ \s ->
+mallocPlainForeignPtrAlignedBytes (I# size) (I# align) = liftPrim $ \s ->
     case newAlignedPinnedByteArray# size align s of { (# s', mbarr# #) ->
        (# s', ForeignPtr (byteArrayContents# (unsafeCoerce# mbarr#))
                          (PlainPtr mbarr#) #)
@@ -297,7 +297,7 @@ addForeignPtrConcFinalizer_ :: ForeignPtrContents -> IO () -> IO ()
 addForeignPtrConcFinalizer_ (PlainForeignPtr r) finalizer = do
   noFinalizers <- insertHaskellFinalizer r finalizer
   if noFinalizers
-     then IO $ \s ->
+     then liftPrim $ \s ->
               case r of { IORef (STRef r#) ->
               case mkWeak# r# () (foreignPtrFinalizer r) s of {  (# s1, _ #) ->
               (# s1, () #) }}
@@ -305,7 +305,7 @@ addForeignPtrConcFinalizer_ (PlainForeignPtr r) finalizer = do
 addForeignPtrConcFinalizer_ f@(MallocPtr fo r) finalizer = do
   noFinalizers <- insertHaskellFinalizer r finalizer
   if noFinalizers
-     then  IO $ \s ->
+     then  liftPrim $ \s ->
                case mkWeak# fo () (do foreignPtrFinalizer r; touch f) s of
                   (# s1, _ #) -> (# s1, () #)
      else return ()
@@ -328,7 +328,7 @@ insertCFinalizer ::
   IORef Finalizers -> Addr# -> Int# -> Addr# -> Addr# -> value -> IO ()
 insertCFinalizer r fp flag ep p val = do
   MyWeak w <- ensureCFinalizerWeak r val
-  IO $ \s -> case addCFinalizerToWeak# fp p flag ep w s of
+  liftPrim $ \s -> case addCFinalizerToWeak# fp p flag ep w s of
       (# s1, 1# #) -> (# s1, () #)
 
       -- Failed to add the finalizer because some other thread
@@ -343,7 +343,7 @@ ensureCFinalizerWeak ref@(IORef (STRef r#)) value = do
   case fin of
       CFinalizers weak -> return (MyWeak weak)
       HaskellFinalizers{} -> noMixingError
-      NoFinalizers -> IO $ \s ->
+      NoFinalizers -> liftPrim $ \s ->
           case mkWeakNoFinalizer# r# (unsafeCoerce# value) s of { (# s1, w #) ->
              -- See Note [MallocPtr finalizers] (#10904)
           case atomicModifyMutVar# r# (update w) s1 of
@@ -367,7 +367,7 @@ foreignPtrFinalizer r = do
   fs <- atomicModifyIORef r $ \fs -> (NoFinalizers, fs) -- atomic, see #7170
   case fs of
     NoFinalizers -> return ()
-    CFinalizers w -> IO $ \s -> case finalizeWeak# w s of
+    CFinalizers w -> liftPrim $ \s -> case finalizeWeak# w s of
         (# s1, 1#, f #) -> f s1
         (# s1, _, _ #) -> (# s1, () #)
     HaskellFinalizers actions -> sequence_ actions
@@ -407,7 +407,7 @@ touchForeignPtr :: ForeignPtr a -> IO ()
 touchForeignPtr (ForeignPtr _ r) = touch r
 
 touch :: ForeignPtrContents -> IO ()
-touch r = IO $ \s -> case touch# r s of s' -> (# s', () #)
+touch r = liftPrim $ \s -> case touch# r s of s' -> (# s', () #)
 
 unsafeForeignPtrToPtr :: ForeignPtr a -> Ptr a
 -- ^This function extracts the pointer component of a foreign

@@ -49,4 +49,4 @@ writeIORef  :: IORef a -> a -> IO ()
 writeIORef (IORef var) v = stToIO (writeSTRef var v)
 
 atomicModifyIORef :: IORef a -> (a -> (a,b)) -> IO b
-atomicModifyIORef (IORef (STRef r#)) f = IO $ \s -> atomicModifyMutVar# r# f s
+atomicModifyIORef (IORef (STRef r#)) f = liftPrim $ \s -> atomicModifyMutVar# r# f s

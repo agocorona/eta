@@ -55,7 +55,7 @@ GHC.Real        Classes: Real, Integral, Fractional, RealFrac
                 Rational is needed here because it is mentioned in the signature
                 of 'toRational' in class Real
 
-GHC.ST  The ST monad, instances and a few helper functions
+GHC.ST'  The ST' monad, instances and a few helper functions
 
 Ix              Classes: Ix, plus instances for Int, Bool, Char, Integer, Ordering, tuples
 
@@ -76,6 +76,9 @@ Other Prelude modules are much easier with fewer complex dependencies.
 
 {-# LANGUAGE Unsafe #-}
 {-# LANGUAGE CPP
+           , GHCForeignImportPrim   -- for fibers
+           , UnliftedFFITypes      -- for fibers
+           
            , NoImplicitPrelude
            , BangPatterns
            , ExplicitForAll
@@ -113,7 +116,8 @@ module GHC.Base
         module GHC.Prim,        -- Re-export GHC.Prim and [boot] GHC.Err,
                                 -- to avoid lots of people having to
         module GHC.Err,          -- import it explicitly
-        module GHC.Maybe
+        module GHC.Maybe,
+
   )
         where
 
@@ -124,10 +128,14 @@ import GHC.Magic
 import GHC.Prim
 import GHC.Err
 import GHC.Maybe
-import {-# SOURCE #-} GHC.IO (failIO,mplusIO)
+--import {-# SOURCE #-} GHC.IO (failIO,mplusIO)
 
 import GHC.Tuple ()     -- Note [Depend on GHC.Tuple]
 import GHC.Integer ()   -- Note [Depend on GHC.Integer]
+
+-- for fibers
+import Unsafe.Coerce
+
 
 -- for 'class Semigroup'
 import {-# SOURCE #-} GHC.Real (Integral)
@@ -136,6 +144,8 @@ import {-# SOURCE #-} Data.Semigroup.Internal ( stimesDefault
                                               , stimesList
                                               , stimesIdempotentMonoid
                                               )
+
+
 
 infixr 9  .
 infixr 5  ++
@@ -1296,47 +1306,231 @@ asTypeOf                =  const
 ----------------------------------------------
 
 -- | @since 2.01
-instance  Functor IO where
+instance  Functor IO' where
    fmap f x = x >>= (pure . f)
 
 -- | @since 2.01
-instance Applicative IO where
+instance Applicative IO' where
     {-# INLINE pure #-}
     {-# INLINE (*>) #-}
     {-# INLINE liftA2 #-}
     pure  = returnIO
-    (*>)  = thenIO
+    (*>)  = thenIO'
     (<*>) = ap
     liftA2 = liftM2
 
 -- | @since 2.01
-instance  Monad IO  where
+instance  Monad IO'  where
     {-# INLINE (>>)   #-}
     {-# INLINE (>>=)  #-}
     (>>)      = (*>)
-    (>>=)     = bindIO
-    fail s    = failIO s
+    (>>=)     = bindIO'
+    -- fail s    = failIO s
 
 -- | @since 4.9.0.0
-instance Alternative IO where
-    empty = failIO "mzero"
-    (<|>) = mplusIO
+-- instance Alternative IO' where
+--    empty = failIO "mzero"
+--    (<|>) = mplusIO
 
 -- | @since 4.9.0.0
-instance MonadPlus IO
+-- instance MonadPlus IO'
 
-returnIO :: a -> IO a
-returnIO x = IO (\ s -> (# s, x #))
+returnIO :: a -> IO' a
+returnIO x = IO' (\ s -> (# s, x #))
 
-bindIO :: IO a -> (a -> IO b) -> IO b
-bindIO (IO m) k = IO (\ s -> case m s of (# new_s, a #) -> unIO (k a) new_s)
+bindIO' :: IO' a -> (a -> IO' b) -> IO' b
+bindIO' (IO' m) k = IO' (\ s -> case m s of (# new_s, a #) -> unIO' (k a) new_s)
 
-thenIO :: IO a -> IO b -> IO b
-thenIO (IO m) k = IO (\ s -> case m s of (# new_s, _ #) -> unIO k new_s)
+thenIO' :: IO' a -> IO' b -> IO' b
+thenIO' (IO' m) k = IO' (\ s -> case m s of (# new_s, _ #) -> unIO' k new_s)
+
+unIO' :: IO' a -> (State# RealWorld -> (# State# RealWorld, a #))
+unIO' (IO' a) = a
+
+
+-- Type coercion is necessary because continuations can only be modeled fully within Indexed monads. 
+-- See paper P. Wadler "Monads and composable continuations" 
+-- The symtom of that problem in the typical continuation monad is an extra parameter r that complicates reasoning
+-- This monad eliminates the extra parameter by coercing types since, by construction, the contination parameter is of the
+--  type of the result of the first term of the bind.
+ety :: a -> b 
+ety=   dontWorryEverithingisOk
+tdyn :: a -> Dyn
+tdyn=  dontWorryEverithingisOk
+fdyn :: Dyn -> a
+fdyn = dontWorryEverithingisOk
+x !> y= x
+dontWorryEverithingisOk= unsafeCoerce
+
+data STRef' s a = STRef' (MutVar# s a)
+type STRep' s a = State# s -> (# State# s, a #)
+
+newtype ST' s a = ST' (STRep' s a)
+
+-- | @since 2.01
+instance Functor (ST' s) where
+    fmap f (ST' m) = ST' $ \ s ->
+      case (m s) of { (# new_s, r #) ->
+      (# new_s, f r #) }
+      
+-- | @since 4.4.0.0
+instance Applicative (ST' s) where
+    {-# INLINE pure #-}
+    {-# INLINE (*>)   #-}
+    pure x = ST' (\ s -> (# s, x #))
+    m *> k = m >>= \ _ -> k
+    (<*>) = ap
+    liftA2 = liftM2
+
+-- | @since 2.01
+instance Monad (ST' s) where
+    {-# INLINE (>>=)  #-}
+    (>>) = (*>)
+    (ST' m) >>= k
+      = ST' (\ s ->
+        case (m s) of { (# new_s, r #) ->
+        case (k r) of { ST' k2 ->
+        (k2 new_s) }})
+
+-- |Build a new 'STRef'' in the current state thread
+newSTRef' :: a -> ST' s (STRef' s a)
+newSTRef' init = ST' $ \s1# ->
+    case newMutVar# init s1#            of { (# s2#, var# #) ->
+    (# s2#, STRef' var# #) }
+
+-- |Read the value of an 'STRef''
+readSTRef' :: STRef' s a -> ST' s a
+readSTRef' (STRef' var#) = ST' $ \s1# -> readMutVar# var# s1#
+
+-- |Write a new value into an 'STRef''
+writeSTRef' :: STRef' s a -> a -> ST' s ()
+writeSTRef' (STRef' var#) val = ST' $ \s1# ->
+    case writeMutVar# var# val s1#      of { s2# ->
+    (# s2#, () #) }
+
+newtype IORef' a = IORef' (STRef' RealWorld a)
+stToIO'        :: ST' RealWorld a -> IO' a
+stToIO' (ST' m) = IO' m
+
+-- |Build a new 'IORef''
+newIORef'    :: a -> IO' (IORef' a)
+newIORef' v = stToIO' (newSTRef' v) >>= \ var -> return (IORef' var)
+
+-- |Read the value of an 'IORef''
+readIORef'   :: IORef' a -> IO' a
+readIORef'  (IORef' var) = stToIO' (readSTRef' var)
+
+-- |Write a new value into an 'IORef''
+writeIORef'  :: IORef' a -> a -> IO' ()
+writeIORef' (IORef' var) v = stToIO' (writeSTRef' var v)
+
+callCC :: ((a -> IO b) -> IO a) -> IO a
+callCC f = IO $ \ c -> runFiberC (f (\ x -> IO $ \ _ -> ety $ c $ tdyn x)) c
+
+instance Functor IO where 
+    fmap f m = IO $ \c -> ety $ runFiberC m $ \ x->   ety c $ f $ fdyn x
+    
+    
+instance Applicative IO  where
+    pure a  = IO ($  tdyn a)
+    --f <*> v = ety $ IO $ \ k -> ety $ runFiberC f $ \ g -> ety $ runFiberC v $ \t -> k $ (ety g) t
+    f <*> v =   do
+          r1 <- liftIO' $ newIORef' Nothing
+          r2 <- liftIO' $ newIORef' Nothing
+          (fparallel r1 r2)  <|> (vparallel  r1 r2)
+      where
+
+      fparallel :: IORef' (Maybe(a -> b)) -> IORef' (Maybe a) -> IO b 
+      fparallel r1 r2= ety $ IO $ \k  -> 
+          runFiberC f $ \g -> do
+                (liftIO' $ writeIORef' r1  $ Just (fdyn  g)) !> "f write r1"
+                mt <- liftIO' $ readIORef' r2  !> "f read r2"
+                case mt of 
+                  Just t -> k $ (fdyn g) t
+                  Nothing -> liftIO' $ throw'  Empty  !> "throwempty"
+                  
+      vparallel :: IORef' (Maybe(a -> b)) -> IORef' (Maybe a) -> IO b
+      vparallel  r1 r2=  ety $ IO $ \k  ->  
+          runFiberC v $ \t ->  do
+                 (liftIO' $ writeIORef' r2 $ Just (fdyn t)) !> "v write r2"
+                 mg <- liftIO' $ readIORef' r1 !> "v read r1"
+                 case mg of 
+                   Nothing -> liftIO' $ throw'  Empty   !> "throwempty"
+                   Just g -> ( k $ (ety g) t)  !> "JUST"
+{-         
+class  Exception e where
+    toException   :: e -> SomeException
+    fromException :: SomeException -> Maybe e
+
+    toException = SomeException
+    fromException (SomeException e) = cast e
+-}
+catch'   :: IO' a         -- ^ The computation to run
+        -> (e -> IO' a)  -- ^ Handler to invoke if an exception is raised
+        -> IO' a
+-- See #exceptions_and_strictness#.
+catch' (IO' io) handler = IO' $  catch# io (unIO' . handler)
+
+
+-- | Throw an exception.  Exceptions may be thrown from purely
+-- functional code, but may only be caught within the 'IO' monad.
+-- throw' :: forall (r :: RuntimeRep). forall (a :: TYPE r). forall e.
+--         Exception e => e -> a 
+throw' e = raise#  e
+                       
+data Empty= Empty  
+-- instance Show Empty where show _= "Empty"
+-- instance Exception Empty
+
+class (Monad m) => MonadIO' m where
+    -- | Lift a computation from the 'IO' monad.
+    liftIO' :: IO' a -> m a
+
+-- | @since 4.9.0.0
+instance MonadIO' IO' where
+    liftIO' = id
+    
+instance MonadIO' IO  where
+   liftIO' x= IO  (ety x >>=)
 
 unIO :: IO a -> (State# RealWorld -> (# State# RealWorld, a #))
-unIO (IO a) = a
+unIO x=let IO' r= iOtoIO' x in r
+iOtoIO' x = runFiberC x (return . ety id )
 
+--liftPrim :: Prim a -> IO a
+liftPrim = liftIOO . IO'
+  where
+  liftIOO :: IO' a -> IO a
+  liftIOO x= IO  (ety x >>=)
+
+runFiber :: IO a -> IO' a 
+runFiber x= trampolineIO $ runFiberC x (return . ety id )
+  where
+  trampolineIO :: IO' a -> IO' a
+  trampolineIO (IO' m) = IO' $ \s ->
+      case trampolineIO'# (unsafeCoerce# m) s of
+        (# s', a #) -> (# s', unsafeCoerce# a #)
+foreign import prim "eta.runtime.stg.Stg.trampolineIO"
+  trampolineIO'# :: Any -> State# s -> (# State# s, Any #)
+  
+instance Alternative IO where
+    empty= liftIO' $ throw'  Empty 
+    f <|>  g= callCC $ \k -> do -- liftIO'  $ runFiber  (f >>=k)  `catch'` \Empty -> runFiber  (g >>=k) 
+            
+          
+            r <- liftIO' $ newIORef' False
+            let io  f cont= runFiber  (f >>= cont' ) 
+                    where cont' x= do liftIO' $ (writeIORef' r True) ; cont x
+            liftIO' $ do
+                 io f k `catch'` \(Empty) -> do
+                    c <- liftIO' $ readIORef' r 
+                    when c $ throw' Empty 
+                    io g k      
+                    
+instance   Monad IO  where
+    return  = pure
+    m >>= k  = IO $ \c -> ety $ runFiberC m (\x -> ety $ runFiberC ( k $ fdyn x) c)
+    
 ----------------------------------------------
 -- Functor/Applicative/Monad instances for Java
 ----------------------------------------------
@@ -1483,8 +1677,8 @@ a `iShiftRL#` b | isTrue# (b >=# 32#) = 0#
 
 
 -- #ifdef __HADDOCK__
--- -- | A special argument for the 'Control.Monad.ST.ST' type constructor,
+-- -- | A special argument for the 'Control.Monad.ST'.ST'' type constructor,
 -- -- indexing a state embedded in the 'Prelude.IO' monad by
--- -- 'Control.Monad.ST.stToIO'.
+-- -- 'Control.Monad.ST'.stToIO''.
 -- data RealWorld
 -- #endif

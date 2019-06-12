@@ -100,9 +100,9 @@ mkWeak  :: k                            -- ^ key
         -> Maybe (IO ())                -- ^ finalizer
         -> IO (Weak v)                  -- ^ returns: a weak pointer object
 
-mkWeak key val (Just (IO finalizer)) = IO $ \s ->
+mkWeak key val (Just (IO finalizer)) = liftPrim $ \s ->
    case mkWeak# key val finalizer s of { (# s1, w #) -> (# s1, Weak w #) }
-mkWeak key val Nothing = IO $ \s ->
+mkWeak key val Nothing = liftPrim $ \s ->
    case mkWeakNoFinalizer# key val s of { (# s1, w #) -> (# s1, Weak w #) }
 
 {-|
@@ -111,10 +111,10 @@ Dereferences a weak pointer.  If the key is still alive, then
 'Nothing' is returned.
 
 The return value of 'deRefWeak' depends on when the garbage collector
-runs, hence it is in the 'IO' monad.
+runs, hence it is in the 'IO monad.
 -}
 deRefWeak :: Weak v -> IO (Maybe v)
-deRefWeak (Weak w) = IO $ \s ->
+deRefWeak (Weak w) = liftPrim $ \s ->
    case deRefWeak# w s of
         (# s1, flag, p #) -> case flag of
                                 0# -> (# s1, Nothing #)
@@ -123,7 +123,7 @@ deRefWeak (Weak w) = IO $ \s ->
 -- | Causes a the finalizer associated with a weak pointer to be run
 -- immediately.
 finalize :: Weak v -> IO ()
-finalize (Weak w) = IO $ \s ->
+finalize (Weak w) = liftPrim $ \s ->
    case finalizeWeak# w s of
         (# s1, 0#, _ #) -> (# s1, () #) -- already dead, or no finalizer
         (# s1, _,  f #) -> f s1
@@ -143,8 +143,8 @@ Instance Eq (Weak v) where
 
 runFinalizerBatch :: Int -> Array# (State# RealWorld -> State# RealWorld)
                   -> IO ()
-runFinalizerBatch (I# n) arr =
-   let  go m  = IO $ \s ->
+runFinalizerBatch (I# n) arr = 
+   let  go m  = liftPrim $ \s ->
                   case m of
                   0# -> (# s, () #)
                   _  -> let !m' = m -# 1# in
